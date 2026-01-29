@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drain Telemetry - Google Maps</title>
+    <title>Inlet Telemetry - Google Maps</title>
     <style>
         body {
             margin: 0;
@@ -68,11 +68,11 @@
 <body>
     <div id="loading" class="loading">
         <div class="loading-spinner"></div>
-        <div>Loading drain data...</div>
+        <div>Loading inlet data...</div>
     </div>
     <div id="map"></div>
     <div class="info-panel">
-        <h3>🚰 Drain Telemetry</h3>
+        <h3>🚰 Inlet Telemetry</h3>
         <div class="status" id="status">Connecting...</div>
     </div>
 
@@ -110,15 +110,15 @@
             
             infoWindow = new google.maps.InfoWindow();
             
-            // Load drain data
-            loadDrainData();
+            // Load inlet data
+            loadInletData();
         }
         
-        // Fetch and display drain data
-        async function loadDrainData() {
+        // Fetch and display inlet data
+        async function loadInletData() {
             try {
                 const { data, error } = await supabase
-                    .from('tblDrain')
+                    .from('tblInlets')
                     .select('*');
                 
                 if (error) {
@@ -128,69 +128,93 @@
                 document.getElementById('loading').style.display = 'none';
                 
                 if (!data || data.length === 0) {
-                    document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No drain data found</span>';
+                    document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No inlet data found</span>';
                     return;
                 }
                 
-                document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} drains loaded</span>`;
+                document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} inlets loaded</span>`;
                 
                 // Create bounds to fit all markers
                 const bounds = new google.maps.LatLngBounds();
                 
-                // Add markers for each drain
-                data.forEach(drain => {
+                // Add markers for each inlet
+                data.forEach(inlet => {
+                    // Try multiple coordinate field combinations (Latitude/Longitude, then y/x)
+                    let lat, lng;
+                    
+                    if (inlet.Latitude && inlet.Longitude) {
+                        lat = parseFloat(inlet.Latitude);
+                        lng = parseFloat(inlet.Longitude);
+                    } else if (inlet.y && inlet.x) {
+                        lat = parseFloat(inlet.y);
+                        lng = parseFloat(inlet.x);
+                    } else if (inlet.YCOORD && inlet.XCOORD) {
+                        lat = parseFloat(inlet.YCOORD);
+                        lng = parseFloat(inlet.XCOORD);
+                    }
+                    
                     // Check if coordinates are valid
-                    if (drain.y_coordinate && drain.x_coordinate) {
-                        const lat = parseFloat(drain.y_coordinate);
-                        const lng = parseFloat(drain.x_coordinate);
+                    if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                        const position = { lat, lng };
                         
-                        if (!isNaN(lat) && !isNaN(lng)) {
-                            const position = { lat, lng };
-                            
-                            // Create custom marker icon
-                            const marker = new google.maps.Marker({
-                                position: position,
-                                map: map,
-                                title: drain.drain_name || 'Unnamed Drain',
-                                icon: {
-                                    path: google.maps.SymbolPath.CIRCLE,
-                                    scale: 10,
-                                    fillColor: '#1a73e8',
-                                    fillOpacity: 0.9,
-                                    strokeColor: '#ffffff',
-                                    strokeWeight: 2
-                                },
-                                animation: google.maps.Animation.DROP
-                            });
-                            
-                            // Create info window content
-                            const contentString = `
-                                <div style="font-family: 'Roboto', Arial, sans-serif; padding: 10px; max-width: 250px;">
-                                    <h3 style="margin: 0 0 10px 0; color: #1a73e8; font-size: 16px;">
-                                        ${drain.drain_name || 'Unnamed Drain'}
-                                    </h3>
-                                    <div style="font-size: 13px; line-height: 1.6;">
-                                        <p style="margin: 5px 0;"><strong>ID:</strong> ${drain.id}</p>
-                                        <p style="margin: 5px 0;"><strong>Coordinates:</strong><br>
-                                            Lat: ${lat.toFixed(6)}<br>
-                                            Lng: ${lng.toFixed(6)}
-                                        </p>
-                                        <p style="margin: 5px 0;"><strong>Created:</strong><br>
-                                            ${new Date(drain.created_at).toLocaleString()}
-                                        </p>
-                                    </div>
-                                </div>
-                            `;
-                            
-                            // Add click listener to show info window
-                            marker.addListener('click', () => {
-                                infoWindow.setContent(contentString);
-                                infoWindow.open(map, marker);
-                            });
-                            
-                            markers.push(marker);
-                            bounds.extend(position);
+                        // Determine marker color based on status
+                        let markerColor = '#1a73e8'; // Default blue
+                        if (inlet.STATUS) {
+                            const status = inlet.STATUS.toLowerCase();
+                            if (status.includes('active')) markerColor = '#1e8e3e'; // Green
+                            else if (status.includes('inactive')) markerColor = '#d93025'; // Red
+                            else if (status.includes('maintenance')) markerColor = '#f29900'; // Orange
                         }
+                        
+                        // Create custom marker icon
+                        const marker = new google.maps.Marker({
+                            position: position,
+                            map: map,
+                            title: inlet['Facility ID'] || `Inlet ${inlet.OBJECTID}`,
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 10,
+                                fillColor: markerColor,
+                                fillOpacity: 0.9,
+                                strokeColor: '#ffffff',
+                                strokeWeight: 2
+                            },
+                            animation: google.maps.Animation.DROP
+                        });
+                        
+                        // Create info window content with all relevant fields
+                        const contentString = `
+                            <div style="font-family: 'Roboto', Arial, sans-serif; padding: 10px; max-width: 300px;">
+                                <h3 style="margin: 0 0 10px 0; color: #1a73e8; font-size: 16px;">
+                                    ${inlet['Facility ID'] || 'Inlet ' + inlet.OBJECTID}
+                                </h3>
+                                <div style="font-size: 13px; line-height: 1.6;">
+                                    <p style="margin: 5px 0;"><strong>Object ID:</strong> ${inlet.OBJECTID || 'N/A'}</p>
+                                    ${inlet.TYPE ? `<p style="margin: 5px 0;"><strong>Type:</strong> ${inlet.TYPE}</p>` : ''}
+                                    ${inlet.STATUS ? `<p style="margin: 5px 0;"><strong>Status:</strong> ${inlet.STATUS}</p>` : ''}
+                                    ${inlet['Service Area'] ? `<p style="margin: 5px 0;"><strong>Service Area:</strong> ${inlet['Service Area']}</p>` : ''}
+                                    ${inlet.OWNERSHIP ? `<p style="margin: 5px 0;"><strong>Ownership:</strong> ${inlet.OWNERSHIP}</p>` : ''}
+                                    ${inlet.TRASH_RACK ? `<p style="margin: 5px 0;"><strong>Trash Rack:</strong> ${inlet.TRASH_RACK}</p>` : ''}
+                                    ${inlet.HEADWALL ? `<p style="margin: 5px 0;"><strong>Headwall:</strong> ${inlet.HEADWALL}</p>` : ''}
+                                    ${inlet.DATE_BUILT ? `<p style="margin: 5px 0;"><strong>Date Built:</strong> ${inlet.DATE_BUILT}</p>` : ''}
+                                    ${inlet['INVERT ELEVATION'] ? `<p style="margin: 5px 0;"><strong>Invert Elevation:</strong> ${inlet['INVERT ELEVATION']}</p>` : ''}
+                                    <p style="margin: 5px 0;"><strong>Coordinates:</strong><br>
+                                        Lat: ${lat.toFixed(6)}<br>
+                                        Lng: ${lng.toFixed(6)}
+                                    </p>
+                                    ${inlet['EDIT DATE'] ? `<p style="margin: 5px 0; color: #666; font-size: 11px;"><strong>Last Edited:</strong> ${new Date(inlet['EDIT DATE']).toLocaleString()}</p>` : ''}
+                                </div>
+                            </div>
+                        `;
+                        
+                        // Add click listener to show info window
+                        marker.addListener('click', () => {
+                            infoWindow.setContent(contentString);
+                            infoWindow.open(map, marker);
+                        });
+                        
+                        markers.push(marker);
+                        bounds.extend(position);
                     }
                 });
                 
@@ -205,7 +229,7 @@
                 }
                 
             } catch (error) {
-                console.error('Error loading drain data:', error);
+                console.error('Error loading inlet data:', error);
                 document.getElementById('loading').innerHTML = `
                     <div class="error">
                         <strong>⚠️ Error loading data</strong><br><br>
@@ -228,14 +252,14 @@
         
         // Set up real-time updates
         supabase
-            .channel('drain-changes')
+            .channel('inlet-changes')
             .on('postgres_changes', 
-                { event: '*', schema: 'public', table: 'tblDrain' },
+                { event: '*', schema: 'public', table: 'tblInlets' },
                 (payload) => {
                     console.log('Change received!', payload);
                     // Reload data when changes occur
                     clearMarkers();
-                    loadDrainData();
+                    loadInletData();
                 }
             )
             .subscribe();
