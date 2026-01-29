@@ -64,6 +64,22 @@
             color: #d93025;
             padding: 20px;
         }
+        .alert-badge {
+            background: #d93025;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            display: inline-block;
+            margin-left: 5px;
+        }
+        .telemetry-section {
+            background: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 8px 0;
+        }
     </style>
 </head>
 <body>
@@ -100,54 +116,91 @@
         let markers = [];
         
         // Custom icon for inlets
-        const createCustomIcon = (color) => {
+        const createCustomIcon = (color, hasBlockage = false) => {
+            const size = hasBlockage ? 24 : 20;
+            const pulseAnimation = hasBlockage ? 'animation: pulse 2s infinite;' : '';
+            
             return L.divIcon({
                 className: 'custom-marker',
-                html: `<div style="
-                    background-color: ${color};
-                    width: 20px;
-                    height: 20px;
-                    border-radius: 50%;
-                    border: 3px solid white;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                "></div>`,
-                iconSize: [26, 26],
-                iconAnchor: [13, 13],
-                popupAnchor: [0, -13]
+                html: `
+                    <style>
+                        @keyframes pulse {
+                            0%, 100% { transform: scale(1); opacity: 1; }
+                            50% { transform: scale(1.1); opacity: 0.8; }
+                        }
+                    </style>
+                    <div style="
+                        background-color: ${color};
+                        width: ${size}px;
+                        height: ${size}px;
+                        border-radius: 50%;
+                        border: 3px solid white;
+                        box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+                        ${pulseAnimation}
+                    "></div>
+                `,
+                iconSize: [size + 6, size + 6],
+                iconAnchor: [(size + 6) / 2, (size + 6) / 2],
+                popupAnchor: [0, -(size + 6) / 2]
             });
         };
         
-        // Fetch and display inlet data
+        // Fetch and display inlet data with telemetry
         async function loadInletData() {
             try {
                 console.log('Attempting to fetch data from Supabase...');
                 
-                const { data, error } = await supabaseClient
+                // Fetch inlets
+                const { data: inlets, error: inletsError } = await supabaseClient
                     .from('tblInlets')
                     .select('*');
                 
-                console.log('Supabase response:', { data, error });
+                if (inletsError) throw inletsError;
                 
-                if (error) {
-                    throw error;
+                // Fetch readings
+                const { data: readings, error: readingsError } = await supabaseClient
+                    .from('tblReadings')
+                    .select('*')
+                    .order('created_at', { ascending: false });
+                
+                if (readingsError) {
+                    console.warn('Error fetching readings:', readingsError);
+                    // Continue without readings if there's an error
                 }
+                
+                console.log('Supabase response:', { inlets, readings });
                 
                 document.getElementById('loading').style.display = 'none';
                 
-                if (!data || data.length === 0) {
+                if (!inlets || inlets.length === 0) {
                     document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No inlet data found</span>';
                     return;
                 }
                 
-                console.log(`Successfully loaded ${data.length} inlets`);
-                document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} inlets loaded</span>`;
+                // Create a map of latest readings by inlet_id
+                const latestReadings = {};
+                if (readings && readings.length > 0) {
+                    readings.forEach(reading => {
+                        if (!latestReadings[reading.inlet_id]) {
+                            latestReadings[reading.inlet_id] = reading;
+                        }
+                    });
+                }
+                
+                const blockageCount = Object.values(latestReadings).filter(r => r.blockage_detected === 1).length;
+                
+                console.log(`Successfully loaded ${inlets.length} inlets and ${readings ? readings.length : 0} readings`);
+                document.getElementById('status').innerHTML = `
+                    <span style="color: #1e8e3e;">✓ ${inlets.length} inlets loaded</span><br>
+                    ${blockageCount > 0 ? `<span style="color: #d93025; font-weight: bold;">⚠️ ${blockageCount} blockages detected</span>` : '<span style="color: #1e8e3e;">✓ No blockages</span>'}
+                `;
                 
                 // Create a bounds object to fit all markers
                 const bounds = L.latLngBounds();
                 let validMarkerCount = 0;
                 
                 // Add markers for each inlet
-                data.forEach(inlet => {
+                inlets.forEach(inlet => {
                     // Try multiple coordinate field combinations
                     let lat, lng;
                     
@@ -166,26 +219,52 @@
                     if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
                         validMarkerCount++;
                         
-                        // Determine marker color based on status
-                        let markerColor = '#1a73e8'; // Default blue
-                        if (inlet.STATUS) {
+                        // Get latest reading for this inlet
+                        const latestReading = latestReadings[inlet.OBJECTID];
+                        const hasBlockage = latestReading && latestReading.blockage_detected === 1;
+                        
+                        // Determine marker color - RED if blockage detected, otherwise based on status
+                        let markerColor;
+                        if (hasBlockage) {
+                            markerColor = '#d93025'; // Red for blockage
+                        } else if (inlet.STATUS) {
                             const status = inlet.STATUS.toLowerCase();
                             if (status.includes('active')) markerColor = '#1e8e3e'; // Green
                             else if (status.includes('inactive')) markerColor = '#d93025'; // Red
                             else if (status.includes('maintenance')) markerColor = '#f29900'; // Orange
+                            else markerColor = '#1a73e8'; // Blue
+                        } else {
+                            markerColor = '#1a73e8'; // Default blue
                         }
                         
                         const marker = L.marker([lat, lng], { 
-                            icon: createCustomIcon(markerColor)
+                            icon: createCustomIcon(markerColor, hasBlockage)
                         }).addTo(map);
                         
-                        // Create popup content
+                        // Create popup content with telemetry data
                         const popupContent = `
-                            <div style="font-family: 'Roboto', Arial, sans-serif; min-width: 200px;">
+                            <div style="font-family: 'Roboto', Arial, sans-serif; min-width: 220px;">
                                 <h4 style="margin: 0 0 8px 0; color: #1a73e8;">
                                     ${inlet['Facility ID'] || 'Inlet ' + inlet.OBJECTID}
+                                    ${hasBlockage ? '<span class="alert-badge">BLOCKAGE</span>' : ''}
                                 </h4>
-                                <div style="font-size: 12px; line-height: 1.6;">
+                                
+                                ${latestReading ? `
+                                    <div class="telemetry-section">
+                                        <strong style="color: #1a73e8;">📊 Latest Reading</strong>
+                                        <p style="margin: 4px 0;"><strong>Water Level:</strong> ${latestReading.water_level || 'N/A'}</p>
+                                        <p style="margin: 4px 0;"><strong>Blockage:</strong> 
+                                            <span style="color: ${hasBlockage ? '#d93025' : '#1e8e3e'}; font-weight: bold;">
+                                                ${hasBlockage ? '⚠️ YES' : '✓ No'}
+                                            </span>
+                                        </p>
+                                        <p style="margin: 4px 0; font-size: 11px; color: #666;">
+                                            ${new Date(latestReading.created_at).toLocaleString()}
+                                        </p>
+                                    </div>
+                                ` : '<p style="color: #666; font-size: 12px; margin: 8px 0;">No readings available</p>'}
+                                
+                                <div style="font-size: 12px; line-height: 1.6; margin-top: 8px;">
                                     <p style="margin: 4px 0;"><strong>Object ID:</strong> ${inlet.OBJECTID || 'N/A'}</p>
                                     ${inlet.TYPE ? `<p style="margin: 4px 0;"><strong>Type:</strong> ${inlet.TYPE}</p>` : ''}
                                     ${inlet.STATUS ? `<p style="margin: 4px 0;"><strong>Status:</strong> ${inlet.STATUS}</p>` : ''}
@@ -211,7 +290,7 @@
                     }
                 });
                 
-                console.log(`Created ${validMarkerCount} valid markers out of ${data.length} inlets`);
+                console.log(`Created ${validMarkerCount} valid markers out of ${inlets.length} inlets`);
                 
                 // Fit map to show all markers
                 if (bounds.isValid()) {
@@ -236,14 +315,22 @@
             }
         }
         
-        // Set up real-time updates
+        // Set up real-time updates for both tables
         supabaseClient
             .channel('inlet-changes')
             .on('postgres_changes', 
                 { event: '*', schema: 'public', table: 'tblInlets' },
                 (payload) => {
-                    console.log('Change received!', payload);
-                    // Reload data when changes occur
+                    console.log('Inlet change received!', payload);
+                    markers.forEach(marker => map.removeLayer(marker));
+                    markers = [];
+                    loadInletData();
+                }
+            )
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'tblReadings' },
+                (payload) => {
+                    console.log('Reading change received!', payload);
                     markers.forEach(marker => map.removeLayer(marker));
                     markers = [];
                     loadInletData();
