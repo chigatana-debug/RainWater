@@ -117,9 +117,13 @@
         // Fetch and display inlet data
         async function loadInletData() {
             try {
+                console.log('Attempting to fetch data from Supabase...');
+                
                 const { data, error } = await supabase
                     .from('tblInlets')
                     .select('*');
+                
+                console.log('Supabase response:', { data, error });
                 
                 if (error) {
                     throw error;
@@ -132,14 +136,16 @@
                     return;
                 }
                 
+                console.log(`Successfully loaded ${data.length} inlets`);
                 document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} inlets loaded</span>`;
                 
                 // Create bounds to fit all markers
                 const bounds = new google.maps.LatLngBounds();
+                let validMarkerCount = 0;
                 
                 // Add markers for each inlet
                 data.forEach(inlet => {
-                    // Try multiple coordinate field combinations (Latitude/Longitude, then y/x)
+                    // Try multiple coordinate field combinations
                     let lat, lng;
                     
                     if (inlet.Latitude && inlet.Longitude) {
@@ -156,6 +162,7 @@
                     // Check if coordinates are valid
                     if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
                         const position = { lat, lng };
+                        validMarkerCount++;
                         
                         // Determine marker color based on status
                         let markerColor = '#1a73e8'; // Default blue
@@ -215,8 +222,12 @@
                         
                         markers.push(marker);
                         bounds.extend(position);
+                    } else {
+                        console.warn('Invalid coordinates for inlet:', inlet);
                     }
                 });
+                
+                console.log(`Created ${validMarkerCount} valid markers out of ${data.length} inlets`);
                 
                 // Fit map to show all markers
                 if (markers.length > 0) {
@@ -226,6 +237,8 @@
                     if (markers.length === 1) {
                         map.setZoom(15);
                     }
+                } else {
+                    document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No valid coordinates found</span>';
                 }
                 
             } catch (error) {
@@ -269,5 +282,3 @@
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB4A8tjVu0YBXBxMAwqp-i9PukDUGKLQrg&callback=initMap" async defer></script>
 </body>
 </html>
-
-
