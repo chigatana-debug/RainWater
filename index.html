@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Inlet Telemetry - Google Maps</title>
+    <title>Inlet Telemetry Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         body {
             margin: 0;
@@ -45,7 +46,6 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.3);
             z-index: 2000;
             text-align: center;
-            max-width: 400px;
         }
         .loading-spinner {
             border: 3px solid #f3f3f3;
@@ -63,7 +63,6 @@
         .error {
             color: #d93025;
             padding: 20px;
-            text-align: left;
         }
     </style>
 </head>
@@ -78,6 +77,7 @@
         <div class="status" id="status">Connecting...</div>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
     <script>
@@ -85,49 +85,42 @@
         const SUPABASE_URL = 'https://lvmubwveixffneafbfjt.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2bXVid3ZlaXhmZm5lYWZiZmp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0MzAzMDYsImV4cCI6MjA4NDAwNjMwNn0.-3OJ890CHIXUQ6nU-RpsYOCUNGTw-QMQjzZd8VUFS8A';
         
-        // Initialize Supabase client (only if not already initialized)
-        let supabaseClient;
-        if (typeof window.supabaseClient === 'undefined') {
-            supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-            window.supabaseClient = supabaseClient;
-        } else {
-            supabaseClient = window.supabaseClient;
-        }
+        // Initialize Supabase client
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         
-        let map;
+        // Initialize map
+        const map = L.map('map').setView([0, 0], 2);
+        
+        // Add OpenStreetMap tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+        
         let markers = [];
-        let infoWindow;
         
-        // Initialize Google Map
-        function initMap() {
-            console.log('Initializing Google Map...');
-            // Create map centered at a default location
-            map = new google.maps.Map(document.getElementById('map'), {
-                zoom: 2,
-                center: { lat: 0, lng: 0 },
-                mapTypeControl: true,
-                streetViewControl: true,
-                fullscreenControl: true,
-                styles: [
-                    {
-                        featureType: "poi",
-                        elementType: "labels",
-                        stylers: [{ visibility: "off" }]
-                    }
-                ]
+        // Custom icon for inlets
+        const createCustomIcon = (color) => {
+            return L.divIcon({
+                className: 'custom-marker',
+                html: `<div style="
+                    background-color: ${color};
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 50%;
+                    border: 3px solid white;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                "></div>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 13],
+                popupAnchor: [0, -13]
             });
-            
-            infoWindow = new google.maps.InfoWindow();
-            
-            // Load inlet data
-            loadInletData();
-        }
+        };
         
         // Fetch and display inlet data
         async function loadInletData() {
             try {
                 console.log('Attempting to fetch data from Supabase...');
-                console.log('Table: tblInlets');
                 
                 const { data, error } = await supabaseClient
                     .from('tblInlets')
@@ -136,7 +129,6 @@
                 console.log('Supabase response:', { data, error });
                 
                 if (error) {
-                    console.error('Supabase error details:', error);
                     throw error;
                 }
                 
@@ -144,21 +136,18 @@
                 
                 if (!data || data.length === 0) {
                     document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No inlet data found</span>';
-                    console.warn('No data returned from Supabase');
                     return;
                 }
                 
                 console.log(`Successfully loaded ${data.length} inlets`);
-                console.log('First inlet sample:', data[0]);
-                
                 document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} inlets loaded</span>`;
                 
-                // Create bounds to fit all markers
-                const bounds = new google.maps.LatLngBounds();
+                // Create a bounds object to fit all markers
+                const bounds = L.latLngBounds();
                 let validMarkerCount = 0;
                 
                 // Add markers for each inlet
-                data.forEach((inlet, index) => {
+                data.forEach(inlet => {
                     // Try multiple coordinate field combinations
                     let lat, lng;
                     
@@ -175,7 +164,6 @@
                     
                     // Check if coordinates are valid
                     if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
-                        const position = { lat, lng };
                         validMarkerCount++;
                         
                         // Determine marker color based on status
@@ -187,55 +175,37 @@
                             else if (status.includes('maintenance')) markerColor = '#f29900'; // Orange
                         }
                         
-                        // Create custom marker icon
-                        const marker = new google.maps.Marker({
-                            position: position,
-                            map: map,
-                            title: inlet['Facility ID'] || `Inlet ${inlet.OBJECTID}`,
-                            icon: {
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 10,
-                                fillColor: markerColor,
-                                fillOpacity: 0.9,
-                                strokeColor: '#ffffff',
-                                strokeWeight: 2
-                            },
-                            animation: google.maps.Animation.DROP
-                        });
+                        const marker = L.marker([lat, lng], { 
+                            icon: createCustomIcon(markerColor)
+                        }).addTo(map);
                         
-                        // Create info window content with all relevant fields
-                        const contentString = `
-                            <div style="font-family: 'Roboto', Arial, sans-serif; padding: 10px; max-width: 300px;">
-                                <h3 style="margin: 0 0 10px 0; color: #1a73e8; font-size: 16px;">
+                        // Create popup content
+                        const popupContent = `
+                            <div style="font-family: 'Roboto', Arial, sans-serif; min-width: 200px;">
+                                <h4 style="margin: 0 0 8px 0; color: #1a73e8;">
                                     ${inlet['Facility ID'] || 'Inlet ' + inlet.OBJECTID}
-                                </h3>
-                                <div style="font-size: 13px; line-height: 1.6;">
-                                    <p style="margin: 5px 0;"><strong>Object ID:</strong> ${inlet.OBJECTID || 'N/A'}</p>
-                                    ${inlet.TYPE ? `<p style="margin: 5px 0;"><strong>Type:</strong> ${inlet.TYPE}</p>` : ''}
-                                    ${inlet.STATUS ? `<p style="margin: 5px 0;"><strong>Status:</strong> ${inlet.STATUS}</p>` : ''}
-                                    ${inlet['Service Area'] ? `<p style="margin: 5px 0;"><strong>Service Area:</strong> ${inlet['Service Area']}</p>` : ''}
-                                    ${inlet.OWNERSHIP ? `<p style="margin: 5px 0;"><strong>Ownership:</strong> ${inlet.OWNERSHIP}</p>` : ''}
-                                    ${inlet.TRASH_RACK ? `<p style="margin: 5px 0;"><strong>Trash Rack:</strong> ${inlet.TRASH_RACK}</p>` : ''}
-                                    ${inlet.HEADWALL ? `<p style="margin: 5px 0;"><strong>Headwall:</strong> ${inlet.HEADWALL}</p>` : ''}
-                                    ${inlet.DATE_BUILT ? `<p style="margin: 5px 0;"><strong>Date Built:</strong> ${inlet.DATE_BUILT}</p>` : ''}
-                                    ${inlet['INVERT ELEVATION'] ? `<p style="margin: 5px 0;"><strong>Invert Elevation:</strong> ${inlet['INVERT ELEVATION']}</p>` : ''}
-                                    <p style="margin: 5px 0;"><strong>Coordinates:</strong><br>
-                                        Lat: ${lat.toFixed(6)}<br>
-                                        Lng: ${lng.toFixed(6)}
+                                </h4>
+                                <div style="font-size: 12px; line-height: 1.6;">
+                                    <p style="margin: 4px 0;"><strong>Object ID:</strong> ${inlet.OBJECTID || 'N/A'}</p>
+                                    ${inlet.TYPE ? `<p style="margin: 4px 0;"><strong>Type:</strong> ${inlet.TYPE}</p>` : ''}
+                                    ${inlet.STATUS ? `<p style="margin: 4px 0;"><strong>Status:</strong> ${inlet.STATUS}</p>` : ''}
+                                    ${inlet['Service Area'] ? `<p style="margin: 4px 0;"><strong>Service Area:</strong> ${inlet['Service Area']}</p>` : ''}
+                                    ${inlet.OWNERSHIP ? `<p style="margin: 4px 0;"><strong>Ownership:</strong> ${inlet.OWNERSHIP}</p>` : ''}
+                                    ${inlet.TRASH_RACK ? `<p style="margin: 4px 0;"><strong>Trash Rack:</strong> ${inlet.TRASH_RACK}</p>` : ''}
+                                    ${inlet.HEADWALL ? `<p style="margin: 4px 0;"><strong>Headwall:</strong> ${inlet.HEADWALL}</p>` : ''}
+                                    ${inlet.DATE_BUILT ? `<p style="margin: 4px 0;"><strong>Date Built:</strong> ${inlet.DATE_BUILT}</p>` : ''}
+                                    ${inlet['INVERT ELEVATION'] ? `<p style="margin: 4px 0;"><strong>Invert Elevation:</strong> ${inlet['INVERT ELEVATION']}</p>` : ''}
+                                    <p style="margin: 4px 0;"><strong>Coordinates:</strong><br>
+                                        ${lat.toFixed(6)}, ${lng.toFixed(6)}
                                     </p>
-                                    ${inlet['EDIT DATE'] ? `<p style="margin: 5px 0; color: #666; font-size: 11px;"><strong>Last Edited:</strong> ${new Date(inlet['EDIT DATE']).toLocaleString()}</p>` : ''}
+                                    ${inlet['EDIT DATE'] ? `<p style="margin: 4px 0; color: #666; font-size: 11px;"><strong>Last Edited:</strong> ${new Date(inlet['EDIT DATE']).toLocaleString()}</p>` : ''}
                                 </div>
                             </div>
                         `;
                         
-                        // Add click listener to show info window
-                        marker.addListener('click', () => {
-                            infoWindow.setContent(contentString);
-                            infoWindow.open(map, marker);
-                        });
-                        
+                        marker.bindPopup(popupContent);
                         markers.push(marker);
-                        bounds.extend(position);
+                        bounds.extend([lat, lng]);
                     } else {
                         console.warn('Invalid coordinates for inlet:', inlet);
                     }
@@ -244,60 +214,26 @@
                 console.log(`Created ${validMarkerCount} valid markers out of ${data.length} inlets`);
                 
                 // Fit map to show all markers
-                if (markers.length > 0) {
-                    map.fitBounds(bounds);
-                    
-                    // Adjust zoom if only one marker
-                    if (markers.length === 1) {
-                        map.setZoom(15);
-                    }
+                if (bounds.isValid()) {
+                    map.fitBounds(bounds, { padding: [50, 50] });
                 } else {
                     document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No valid coordinates found</span>';
                 }
                 
             } catch (error) {
                 console.error('Error loading inlet data:', error);
-                console.error('Error details:', {
-                    name: error.name,
-                    message: error.message,
-                    code: error.code,
-                    details: error.details,
-                    hint: error.hint
-                });
-                
-                let errorMessage = error.message;
-                let helpText = '';
-                
-                // Provide specific help based on error type
-                if (error.message && error.message.includes('JWT')) {
-                    helpText = 'API key issue - check your Supabase anon key';
-                } else if (error.message && error.message.includes('permission')) {
-                    helpText = 'Permission denied - Row Level Security (RLS) may be blocking access';
-                } else if (error.code === '42P01') {
-                    helpText = 'Table not found - check table name is exactly "tblInlets"';
-                }
-                
                 document.getElementById('loading').innerHTML = `
                     <div class="error">
                         <strong>⚠️ Error loading data</strong><br><br>
-                        <strong>Error:</strong> ${errorMessage}<br>
-                        ${helpText ? `<br><strong>Likely cause:</strong> ${helpText}<br>` : ''}
-                        <br>
-                        <small><strong>Check console for full details</strong></small><br><br>
-                        <small>Common fixes:</small><br>
-                        <small>• Enable public SELECT access in RLS policies</small><br>
-                        <small>• Verify table name is "tblInlets"</small><br>
-                        <small>• Check API key is correct</small>
+                        ${error.message}<br><br>
+                        <small>Please check:</small><br>
+                        <small>• Supabase credentials</small><br>
+                        <small>• Table permissions (RLS)</small><br>
+                        <small>• Network connection</small>
                     </div>
                 `;
                 document.getElementById('status').innerHTML = '<span style="color: #d93025;">✗ Error loading data</span>';
             }
-        }
-        
-        // Clear all markers
-        function clearMarkers() {
-            markers.forEach(marker => marker.setMap(null));
-            markers = [];
         }
         
         // Set up real-time updates
@@ -308,14 +244,15 @@
                 (payload) => {
                     console.log('Change received!', payload);
                     // Reload data when changes occur
-                    clearMarkers();
+                    markers.forEach(marker => map.removeLayer(marker));
+                    markers = [];
                     loadInletData();
                 }
             )
             .subscribe();
+        
+        // Load data when page loads
+        loadInletData();
     </script>
-    
-    <!-- Load Google Maps API -->
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB4A8tjVu0YBXBxMAwqp-i9PukDUGKLQrg&callback=initMap" async defer></script>
 </body>
 </html>
