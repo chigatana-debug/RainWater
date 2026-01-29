@@ -45,6 +45,7 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.3);
             z-index: 2000;
             text-align: center;
+            max-width: 400px;
         }
         .loading-spinner {
             border: 3px solid #f3f3f3;
@@ -62,6 +63,7 @@
         .error {
             color: #d93025;
             padding: 20px;
+            text-align: left;
         }
     </style>
 </head>
@@ -83,8 +85,14 @@
         const SUPABASE_URL = 'https://lvmubwveixffneafbfjt.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2bXVid3ZlaXhmZm5lYWZiZmp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0MzAzMDYsImV4cCI6MjA4NDAwNjMwNn0.-3OJ890CHIXUQ6nU-RpsYOCUNGTw-QMQjzZd8VUFS8A';
         
-        // Initialize Supabase client
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        // Initialize Supabase client (only if not already initialized)
+        let supabaseClient;
+        if (typeof window.supabaseClient === 'undefined') {
+            supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            window.supabaseClient = supabaseClient;
+        } else {
+            supabaseClient = window.supabaseClient;
+        }
         
         let map;
         let markers = [];
@@ -92,6 +100,7 @@
         
         // Initialize Google Map
         function initMap() {
+            console.log('Initializing Google Map...');
             // Create map centered at a default location
             map = new google.maps.Map(document.getElementById('map'), {
                 zoom: 2,
@@ -118,14 +127,16 @@
         async function loadInletData() {
             try {
                 console.log('Attempting to fetch data from Supabase...');
+                console.log('Table: tblInlets');
                 
-                const { data, error } = await supabase
+                const { data, error } = await supabaseClient
                     .from('tblInlets')
                     .select('*');
                 
                 console.log('Supabase response:', { data, error });
                 
                 if (error) {
+                    console.error('Supabase error details:', error);
                     throw error;
                 }
                 
@@ -133,10 +144,13 @@
                 
                 if (!data || data.length === 0) {
                     document.getElementById('status').innerHTML = '<span style="color: #f29900;">⚠️ No inlet data found</span>';
+                    console.warn('No data returned from Supabase');
                     return;
                 }
                 
                 console.log(`Successfully loaded ${data.length} inlets`);
+                console.log('First inlet sample:', data[0]);
+                
                 document.getElementById('status').innerHTML = `<span style="color: #1e8e3e;">✓ ${data.length} inlets loaded</span>`;
                 
                 // Create bounds to fit all markers
@@ -144,7 +158,7 @@
                 let validMarkerCount = 0;
                 
                 // Add markers for each inlet
-                data.forEach(inlet => {
+                data.forEach((inlet, index) => {
                     // Try multiple coordinate field combinations
                     let lat, lng;
                     
@@ -243,14 +257,37 @@
                 
             } catch (error) {
                 console.error('Error loading inlet data:', error);
+                console.error('Error details:', {
+                    name: error.name,
+                    message: error.message,
+                    code: error.code,
+                    details: error.details,
+                    hint: error.hint
+                });
+                
+                let errorMessage = error.message;
+                let helpText = '';
+                
+                // Provide specific help based on error type
+                if (error.message && error.message.includes('JWT')) {
+                    helpText = 'API key issue - check your Supabase anon key';
+                } else if (error.message && error.message.includes('permission')) {
+                    helpText = 'Permission denied - Row Level Security (RLS) may be blocking access';
+                } else if (error.code === '42P01') {
+                    helpText = 'Table not found - check table name is exactly "tblInlets"';
+                }
+                
                 document.getElementById('loading').innerHTML = `
                     <div class="error">
                         <strong>⚠️ Error loading data</strong><br><br>
-                        ${error.message}<br><br>
-                        <small>Please check:</small><br>
-                        <small>• Supabase credentials</small><br>
-                        <small>• Table permissions (RLS)</small><br>
-                        <small>• Network connection</small>
+                        <strong>Error:</strong> ${errorMessage}<br>
+                        ${helpText ? `<br><strong>Likely cause:</strong> ${helpText}<br>` : ''}
+                        <br>
+                        <small><strong>Check console for full details</strong></small><br><br>
+                        <small>Common fixes:</small><br>
+                        <small>• Enable public SELECT access in RLS policies</small><br>
+                        <small>• Verify table name is "tblInlets"</small><br>
+                        <small>• Check API key is correct</small>
                     </div>
                 `;
                 document.getElementById('status').innerHTML = '<span style="color: #d93025;">✗ Error loading data</span>';
@@ -264,7 +301,7 @@
         }
         
         // Set up real-time updates
-        supabase
+        supabaseClient
             .channel('inlet-changes')
             .on('postgres_changes', 
                 { event: '*', schema: 'public', table: 'tblInlets' },
